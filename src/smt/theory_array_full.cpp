@@ -87,9 +87,13 @@ namespace smt {
         var_data_full * d_full     = m_var_data_full[v];
         d_full->m_parent_maps.push_back(s);
         m_trail_stack.push(push_back_trail<theory_array, enode *, false>(d_full->m_parent_maps));
-        if (!m_params.m_array_weak && !m_params.m_array_delay_exp_axiom && d->m_prop_upward) {
+        if (!m_params.m_array_delay_exp_axiom && d->m_prop_upward) {
             for (enode * n : d->m_parent_selects) {
                 if (!m_params.m_array_cg || n->is_cgr()) {
+                    if (m_params.m_array_weak) {
+                        found_unsupported_op(s);
+                        break;
+                    }
                     instantiate_select_map_axiom(n, s);
                 }                
             }
@@ -100,14 +104,16 @@ namespace smt {
     // set set_prop_upward on root and recursively on children if necessary.
     // 
     void theory_array_full::set_prop_upward(theory_var v) {
-        if (m_params.m_array_weak)
-            return;
         v = find(v);
         var_data * d = m_var_data[v];
         if (!d->m_prop_upward) {
             m_trail_stack.push(reset_flag_trail<theory_array>(d->m_prop_upward));
             d->m_prop_upward = true;
             TRACE("array", tout << "#" << v << "\n";);
+            if (m_params.m_array_weak) {
+                found_unsupported_op(v);
+                return;
+            }
             if (!m_params.m_array_delay_exp_axiom) {
                 instantiate_axiom2b_for(v);
                 instantiate_axiom_map_for(v);
@@ -250,7 +256,7 @@ namespace smt {
             return theory_array::internalize_term(n);
         }
 
-        if (!is_const(n) && !is_default(n)  && !is_map(n) && !is_as_array(n)) {
+        if (!is_const(n) && !is_default(n)  && !is_map(n) && !is_as_array(n) && !is_set_has_size(n) && !is_set_card(n)) {
             if (!is_array_ext(n))
                 found_unsupported_op(n);
             return false;
@@ -273,6 +279,12 @@ namespace smt {
             if (!is_attached_to_var(arg0)) {
                 mk_var(arg0);
             }
+        }
+        else if (is_set_has_size(n) || is_set_card(n)) {
+            if (!m_bapa) {
+                m_bapa = alloc(theory_array_bapa, *this);
+            }
+            m_bapa->internalize_term(n);
         }
 
         enode* node = ctx.get_enode(n);
@@ -349,8 +361,13 @@ namespace smt {
             instantiate_default_store_axiom(store);
         }        
 
-        if (!m_params.m_array_weak && !m_params.m_array_delay_exp_axiom && d->m_prop_upward) {
-            instantiate_parent_stores_default(v);
+        if (!m_params.m_array_delay_exp_axiom && d->m_prop_upward) {
+            if (m_params.m_array_weak) {
+                found_unsupported_op(v);
+            }
+            else {
+                instantiate_parent_stores_default(v);
+            }
         }
     }
 
@@ -370,10 +387,14 @@ namespace smt {
             SASSERT(is_map(map));
             instantiate_select_map_axiom(s, map);
         }
-        if (!m_params.m_array_weak && !m_params.m_array_delay_exp_axiom && d->m_prop_upward) {
+        if (!m_params.m_array_delay_exp_axiom && d->m_prop_upward) {
             for (enode * map : d_full->m_parent_maps) {
                 SASSERT(is_map(map));
                 if (!m_params.m_array_cg || map->is_cgr()) {
+                    if (m_params.m_array_weak) {
+                        found_unsupported_op(s);
+                        break;
+                    }
                     instantiate_select_map_axiom(s, map);
                 }
             }
@@ -421,6 +442,13 @@ namespace smt {
         }
     }
 
+    bool theory_array_full::should_research(expr_ref_vector & unsat_core) {
+        return m_bapa && m_bapa->should_research(unsat_core);
+    }
+
+    void theory_array_full::add_theory_assumptions(expr_ref_vector & assumptions) {
+        if (m_bapa) m_bapa->add_theory_assumptions(assumptions);
+    }
        
     //
     // Assert axiom: 
@@ -735,8 +763,11 @@ namespace smt {
                 var_data * d = m_var_data[v];
                 if (d->m_prop_upward && instantiate_axiom_map_for(v))
                     r = FC_CONTINUE;
-                if (d->m_prop_upward && !m_params.m_array_weak) {
-                    if (instantiate_parent_stores_default(v))
+                if (d->m_prop_upward) {
+                    if (m_params.m_array_weak) {
+                        found_unsupported_op(v);
+                    }
+                    else if (instantiate_parent_stores_default(v))
                         r = FC_CONTINUE;
                 }
             }
@@ -748,6 +779,10 @@ namespace smt {
             assert_axiom(eq);
             r = FC_CONTINUE;
         }
+        if (r == FC_DONE && m_bapa) {
+            r = m_bapa->final_check();
+        }
+
         if (r == FC_DONE && m_found_unsupported_op)
             r = FC_GIVEUP;
         return r;
@@ -781,8 +816,10 @@ namespace smt {
         else {
             m_eqs.insert(v1, v2, true);
             literal eq(mk_eq(v1, v2, true));
+            if (get_manager().has_trace_stream()) log_axiom_instantiation(get_context().bool_var2expr(eq.var()));
             get_context().mark_as_relevant(eq);            
             assert_axiom(eq);
+            if (get_manager().has_trace_stream()) get_manager().trace_stream() << "[end-of-instance]\n";
 
             // m_eqsv.push_back(eq);
             return true;

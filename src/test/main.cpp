@@ -143,7 +143,6 @@ int main(int argc, char ** argv) {
     bool test_all = false;
     parse_cmd_line_args(argc, argv, do_display_usage, test_all);
     TST(random);
-    TST(vector);
     TST(symbol_table);
     TST(region);
     TST(symbol);
@@ -213,6 +212,7 @@ int main(int argc, char ** argv) {
     if (test_all) return 0;
     TST(ext_numeral);
     TST(interval);
+    TST(vector);
     TST(f2n);
     TST(hwf);
     TST(trigo);
@@ -251,7 +251,3 @@ int main(int argc, char ** argv) {
     TST(solver_pool);
     //TST_ARGV(hs);
 }
-
-void initialize_mam() {}
-void finalize_mam() {}
-

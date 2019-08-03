@@ -217,7 +217,9 @@ namespace smt {
         }
         literal lit(ctx.get_literal(e));
         ctx.mark_as_relevant(lit);
+        if (m.has_trace_stream()) log_axiom_instantiation(e);
         ctx.mk_th_axiom(get_id(), 1, &lit);
+        if (m.has_trace_stream()) m.trace_stream() << "[end-of-instance]\n";
 
         // crash/error avoidance: add all axioms to the trail
         m_trail.push_back(e);
@@ -1084,7 +1086,9 @@ namespace smt {
 
             literal lit(mk_eq(len_str, len, false));
             ctx.mark_as_relevant(lit);
+            if (m.has_trace_stream()) log_axiom_instantiation(ctx.bool_var2expr(lit.var()));
             ctx.mk_th_axiom(get_id(), 1, &lit);
+            if (m.has_trace_stream()) m.trace_stream() << "[end-of-instance]\n";
         } else {
             // build axiom 1: Length(a_str) >= 0
             {
@@ -1126,7 +1130,9 @@ namespace smt {
                 TRACE("str", tout << "string axiom 2: " << mk_ismt2_pp(lhs, m) << " <=> " << mk_ismt2_pp(rhs, m) << std::endl;);
                 literal l(mk_eq(lhs, rhs, true));
                 ctx.mark_as_relevant(l);
+                if (m.has_trace_stream()) log_axiom_instantiation(ctx.bool_var2expr(l.var()));
                 ctx.mk_th_axiom(get_id(), 1, &l);
+                if (m.has_trace_stream()) m.trace_stream() << "[end-of-instance]\n";
             }
 
         }
@@ -1421,7 +1427,7 @@ namespace smt {
         // 0 < i < len(H) -->
         //     H = hd ++ tl
         //     len(hd) = i
-        //     str.indexof(tl, N, 0)
+        //     i + str.indexof(tl, N, 0)
 
         expr * H = nullptr; // "haystack"
         expr * N = nullptr; // "needle"
@@ -1457,12 +1463,19 @@ namespace smt {
             expr_ref conclusion(ctx.mk_eq_atom(e, minus_one), m);
             assert_implication(premise, conclusion);
         }
-        // case 4: 0 < i < len(H)
+        // case 3.5: H doesn't contain N
+        {
+            expr_ref premise(m.mk_not(u.str.mk_contains(H, N)), m);
+            expr_ref conclusion(ctx.mk_eq_atom(e, minus_one), m);
+            assert_implication(premise, conclusion);
+        }
+        // case 4: 0 < i < len(H) and H contains N
         {
             expr_ref premise1(m_autil.mk_gt(i, zero), m);
             //expr_ref premise2(m_autil.mk_lt(i, mk_strlen(H)), m);
             expr_ref premise2(m.mk_not(m_autil.mk_ge(m_autil.mk_add(i, m_autil.mk_mul(minus_one, mk_strlen(H))), zero)), m);
-            expr_ref _premise(m.mk_and(premise1, premise2), m);
+            expr_ref premise3(u.str.mk_contains(H, N), m);
+            expr_ref _premise(m.mk_and(premise1, premise2, premise3), m);
             expr_ref premise(_premise);
             th_rewriter rw(m);
             rw(premise);
@@ -1473,7 +1486,8 @@ namespace smt {
             expr_ref_vector conclusion_terms(m);
             conclusion_terms.push_back(ctx.mk_eq_atom(H, mk_concat(hd, tl)));
             conclusion_terms.push_back(ctx.mk_eq_atom(mk_strlen(hd), i));
-            conclusion_terms.push_back(ctx.mk_eq_atom(e, mk_indexof(tl, N)));
+            conclusion_terms.push_back(u.str.mk_contains(tl, N));
+            conclusion_terms.push_back(ctx.mk_eq_atom(e, m_autil.mk_add(i, mk_indexof(tl, N))));
 
             expr_ref conclusion(mk_and(conclusion_terms), m);
             assert_implication(premise, conclusion);
@@ -1682,10 +1696,10 @@ namespace smt {
         expr_ref i1(mk_int_var("i1"), m);
         expr_ref result(mk_str_var("result"), m);
 
-        expr * replaceS;
-        expr * replaceT;
-        expr * replaceTPrime;
-        u.str.is_replace(ex, replaceS, replaceT, replaceTPrime);
+        expr * replaceS = nullptr;
+        expr * replaceT = nullptr;
+        expr * replaceTPrime = nullptr;
+        VERIFY(u.str.is_replace(ex, replaceS, replaceT, replaceTPrime));
 
         // t empty => result = (str.++ t' s)
         expr_ref emptySrcAst(ctx.mk_eq_atom(replaceT, mk_string("")), m);
@@ -4851,6 +4865,7 @@ namespace smt {
     bool theory_str::get_arith_value(expr* e, rational& val) const {
          context& ctx = get_context();
          ast_manager & m = get_manager();
+         (void)m;
          if (!ctx.e_internalized(e)) {
              return false;
          }
@@ -7219,20 +7234,18 @@ namespace smt {
     expr_ref theory_str::aut_path_rewrite_constraint(expr * cond, expr * ch_var) {
         context & ctx = get_context();
         ast_manager & m = get_manager();
-        bv_util bvu(m);
 
         expr_ref retval(m);
-
-        rational char_val;
-        unsigned int bv_width;
+        
+        unsigned char_val = 0;
 
         expr * lhs;
         expr * rhs;
 
-        if (bvu.is_numeral(cond, char_val, bv_width)) {
-            SASSERT(char_val.is_nonneg() && char_val.get_unsigned() < 256);
+        if (u.is_const_char(cond, char_val)) {
+            SASSERT(char_val < 256);
             TRACE("str", tout << "rewrite character constant " << char_val << std::endl;);
-            zstring str_const(char_val.get_unsigned());
+            zstring str_const(char_val);
             retval = u.str.mk_string(str_const);
             return retval;
         } else if (is_var(cond)) {
@@ -7377,23 +7390,20 @@ namespace smt {
                     } else if (mv.t()->is_range()) {
                         expr_ref range_lo(mv.t()->get_lo(), m);
                         expr_ref range_hi(mv.t()->get_hi(), m);
-                        bv_util bvu(m);
 
-                        rational lo_val, hi_val;
-                        unsigned int bv_width;
+                        unsigned lo_val, hi_val;
 
-                        if (bvu.is_numeral(range_lo, lo_val, bv_width) && bvu.is_numeral(range_hi, hi_val, bv_width)) {
+                        if (u.is_const_char(range_lo, lo_val) && u.is_const_char(range_hi, hi_val)) {
                             TRACE("str", tout << "make range predicate from " << lo_val << " to " << hi_val << std::endl;);
                             expr_ref cond_rhs(m);
 
                             if (hi_val < lo_val) {
-                                rational tmp = lo_val;
-                                lo_val = hi_val;
-                                hi_val = tmp;
+                                // NSB: why? The range would be empty. 
+                                std::swap(lo_val, hi_val);
                             }
 
                             expr_ref_vector cond_rhs_terms(m);
-                            for (unsigned i = lo_val.get_unsigned(); i <= hi_val.get_unsigned(); ++i) {
+                            for (unsigned i = lo_val; i <= hi_val; ++i) {
                                 zstring str_const(i);
                                 expr_ref str_expr(u.str.mk_string(str_const), m);
                                 cond_rhs_terms.push_back(ctx.mk_eq_atom(ch, str_expr));
@@ -8260,6 +8270,7 @@ namespace smt {
 
     void theory_str::check_eqc_concat_concat(std::set<expr*> & eqc_concat_lhs, std::set<expr*> & eqc_concat_rhs) {
         ast_manager & m = get_manager();
+        (void)m;
 
         int hasCommon = 0;
         if (!eqc_concat_lhs.empty() && !eqc_concat_rhs.empty()) {

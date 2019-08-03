@@ -328,6 +328,8 @@ namespace smt {
         scoped_vector<eq>          m_eqs;        // set of current equations.
         scoped_vector<ne>          m_nqs;        // set of current disequalities.
         scoped_vector<nc>          m_ncs;        // set of non-contains constraints.
+        scoped_vector<expr*>       m_lts;        // set of asserted str.<, str.<= literals
+        bool                       m_lts_checked; 
         unsigned                   m_eq_id;
         th_union_find              m_find;
 
@@ -336,13 +338,12 @@ namespace smt {
         obj_map<enode, obj_map<enode, int>>   m_len_offset;
         int                                   m_len_prop_lvl;
 
-
         seq_factory*               m_factory;    // value factory
         exclusion_table            m_exclude;    // set of asserted disequalities.
         expr_ref_vector            m_axioms;     // list of axioms to add.
         obj_hashtable<expr>        m_axiom_set;
         unsigned                   m_axioms_head; // index of first axiom to add.
-        bool            m_incomplete;             // is the solver (clearly) incomplete for the fragment.
+        bool                       m_incomplete;             // is the solver (clearly) incomplete for the fragment.
         expr_ref_vector     m_int_string;
         obj_map<expr, rational> m_si_axioms;
         obj_hashtable<expr> m_has_length;          // is length applied
@@ -357,7 +358,7 @@ namespace smt {
         th_trail_stack   m_trail_stack;
         stats            m_stats;
         symbol           m_prefix, m_suffix, m_accept, m_reject;
-        symbol           m_tail, m_nth, m_seq_first, m_seq_last, m_indexof_left, m_indexof_right, m_aut_step;
+        symbol           m_tail, m_seq_first, m_seq_last, m_indexof_left, m_indexof_right, m_aut_step;
         symbol           m_pre, m_post, m_eq, m_seq_align;
         ptr_vector<expr> m_todo;
         expr_ref_vector  m_ls, m_rs, m_lhs, m_rhs;
@@ -394,6 +395,7 @@ namespace smt {
         void add_theory_assumptions(expr_ref_vector & assumptions) override;
         theory* mk_fresh(context* new_ctx) override { return alloc(theory_seq, new_ctx->get_manager(), m_params); }
         char const * get_name() const override { return "seq"; }
+        bool include_func_interp(func_decl* f) override { return m_util.str.is_nth_u(f); }
         theory_var mk_var(enode* n) override;
         void apply_sort_cnstr(enode* n, sort* s) override;
         void display(std::ostream & out) const override;
@@ -404,6 +406,8 @@ namespace smt {
         void init_search_eh() override;
 
         void init_model(expr_ref_vector const& es);
+        app* get_ite_value(expr* a);
+        void get_ite_concat(expr* e, ptr_vector<expr>& concats);
         
         void len_offset(expr* e, rational val);
         void prop_arith_to_len_offset();
@@ -418,12 +422,13 @@ namespace smt {
         bool reduce_length_eq();
         bool branch_unit_variable();     // branch on XYZ = abcdef
         bool branch_binary_variable();   // branch on abcX = Ydefg 
+        bool branch_variable();          // branch on 
         bool branch_ternary_variable1(); // branch on XabcY = Zdefg or XabcY = defgZ
         bool branch_ternary_variable2(); // branch on XabcY = defgZmnpq
         bool branch_quat_variable();     // branch on XabcY = ZdefgT
         bool len_based_split();          // split based on len offset
         bool branch_variable_mb();       // branch on a variable, model based on length
-        bool branch_variable();          // branch on a variable
+        bool branch_variable_eq();       // branch on a variable, by an alignment among variable boundaries.
         bool is_solved(); 
         bool check_length_coherence();
         bool check_length_coherence0(expr* e);
@@ -431,7 +436,7 @@ namespace smt {
         bool fixed_length(bool is_zero = false);
         bool fixed_length(expr* e, bool is_zero);
         void branch_unit_variable(dependency* dep, expr* X, expr_ref_vector const& units);
-        bool branch_variable(eq const& e);
+        bool branch_variable_eq(eq const& e);
         bool branch_binary_variable(eq const& e);
         bool eq_unit(expr* const& l, expr* const &r) const;       
         unsigned_vector overlap(expr_ref_vector const& ls, expr_ref_vector const& rs);
@@ -449,9 +454,11 @@ namespace smt {
                            vector<rational> const& ll, vector<rational> const& rl);
         bool set_empty(expr* x);
         bool is_complex(eq const& e);
+        lbool regex_are_equal(expr* r1, expr* r2);
 
         bool check_extensionality();
         bool check_contains();
+        bool check_lts();
         bool solve_eqs(unsigned start);
         bool solve_eq(expr_ref_vector const& l, expr_ref_vector const& r, dependency* dep, unsigned idx);
         bool simplify_eq(expr_ref_vector& l, expr_ref_vector& r, dependency* dep);
@@ -521,8 +528,6 @@ namespace smt {
         bool is_var(expr* b) const;
         bool add_solution(expr* l, expr* r, dependency* dep);
         bool is_unit_nth(expr* a) const;
-        bool is_nth(expr* a) const;
-        bool is_nth(expr* a, expr*& e1, expr*& e2) const;
         bool is_tail(expr* a, expr*& s, unsigned& idx) const;
         bool is_eq(expr* e, expr*& a, expr*& b) const; 
         bool is_pre(expr* e, expr*& s, expr*& i);
@@ -539,14 +544,14 @@ namespace smt {
         expr_ref expand1(expr* e, dependency*& eqs);
         expr_ref try_expand(expr* e, dependency*& eqs);
         void add_dependency(dependency*& dep, enode* a, enode* b);
-
-        void get_concat(expr* e, ptr_vector<expr>& concats);
     
         // terms whose meaning are encoded using axioms.
         void enque_axiom(expr* e);
         void deque_axiom(expr* e);
+        void push_lit_as_expr(literal l, expr_ref_vector& buf);
         void add_axiom(literal l1, literal l2 = null_literal, literal l3 = null_literal, literal l4 = null_literal, literal l5 = null_literal);        
         void add_indexof_axiom(expr* e);
+        void add_last_indexof_axiom(expr* e);
         void add_replace_axiom(expr* e);
         void add_extract_axiom(expr* e);
         void add_length_axiom(expr* n);
@@ -573,6 +578,9 @@ namespace smt {
 
         expr_ref add_elim_string_axiom(expr* n);
         void add_at_axiom(expr* n);
+        void add_lt_axiom(expr* n);
+        void add_le_axiom(expr* n);
+        void add_nth_axiom(expr* n);
         void add_in_re_axiom(expr* n);
         void add_itos_axiom(expr* n);
         void add_stoi_axiom(expr* n);
@@ -606,7 +614,7 @@ namespace smt {
         bool get_length(expr* s, rational& val) const;
 
         void mk_decompose(expr* e, expr_ref& head, expr_ref& tail);
-        expr* coalesce_chars(expr* const& str);
+        expr_ref coalesce_chars(expr* const& str);
         expr_ref mk_skolem(symbol const& s, expr* e1, expr* e2 = nullptr, expr* e3 = nullptr, expr* e4 = nullptr, sort* range = nullptr);
         bool is_skolem(symbol const& s, expr* e) const;
 

@@ -22,27 +22,19 @@ Notes:
 #include "api/api_context.h"
 #include "ast/fpa_decl_plugin.h"
 
-bool is_fp_sort(Z3_context c, Z3_sort s) {
+static bool is_fp_sort(Z3_context c, Z3_sort s) {
     return mk_c(c)->fpautil().is_float(to_sort(s));
 }
 
-bool is_fp(Z3_context c, Z3_ast a) {
+static bool is_fp(Z3_context c, Z3_ast a) {
     return mk_c(c)->fpautil().is_float(to_expr(a));
 }
 
-bool is_rm_sort(Z3_context c, Z3_sort s) {
-    return mk_c(c)->fpautil().is_rm(to_sort(s));
-}
-
-bool is_rm(Z3_context c, Z3_ast a) {
+static bool is_rm(Z3_context c, Z3_ast a) {
     return mk_c(c)->fpautil().is_rm(to_expr(a));
 }
 
-bool is_bv_sort(Z3_context c, Z3_sort s) {
-    return mk_c(c)->bvutil().is_bv_sort(to_sort(s));
-}
-
-bool is_bv(Z3_context c, Z3_ast a) {
+static bool is_bv(Z3_context c, Z3_ast a) {
     return mk_c(c)->bvutil().is_bv(to_expr(a));
 }
 
@@ -242,8 +234,8 @@ extern "C" {
             RETURN_Z3(nullptr);
         }
         api::context * ctx = mk_c(c);
-        expr * a = negative != 0 ? ctx->fpautil().mk_ninf(to_sort(s)) :
-                                   ctx->fpautil().mk_pinf(to_sort(s));
+        expr * a = negative ? ctx->fpautil().mk_ninf(to_sort(s)) :
+                              ctx->fpautil().mk_pinf(to_sort(s));
         ctx->save_ast_trail(a);
         RETURN_Z3(of_expr(a));
         Z3_CATCH_RETURN(nullptr);
@@ -259,8 +251,8 @@ extern "C" {
             RETURN_Z3(nullptr);
         }
         api::context * ctx = mk_c(c);
-        expr * a = negative != 0 ? ctx->fpautil().mk_nzero(to_sort(s)) :
-                                   ctx->fpautil().mk_pzero(to_sort(s));
+        expr * a = negative ? ctx->fpautil().mk_nzero(to_sort(s)) :
+                              ctx->fpautil().mk_pzero(to_sort(s));
         ctx->save_ast_trail(a);
         RETURN_Z3(of_expr(a));
         Z3_CATCH_RETURN(nullptr);
@@ -351,7 +343,7 @@ extern "C" {
         ctx->fpautil().fm().set(tmp,
                                 ctx->fpautil().get_ebits(to_sort(ty)),
                                 ctx->fpautil().get_sbits(to_sort(ty)),
-                                sgn != 0, exp, sig);
+                                sgn, exp, sig);
         expr * a = ctx->fpautil().mk_value(tmp);
         ctx->save_ast_trail(a);
         RETURN_Z3(of_expr(a));
@@ -371,7 +363,7 @@ extern "C" {
         ctx->fpautil().fm().set(tmp,
                                 ctx->fpautil().get_ebits(to_sort(ty)),
                                 ctx->fpautil().get_sbits(to_sort(ty)),
-                                sgn != 0, exp, sig);
+                                sgn, exp, sig);
         expr * a = ctx->fpautil().mk_value(tmp);
         ctx->save_ast_trail(a);
         RETURN_Z3(of_expr(a));

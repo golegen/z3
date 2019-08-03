@@ -20,18 +20,21 @@ Revision History:
 #define MPN_H_
 
 #include<ostream>
+#include<mutex>
 #include "util/util.h"
 #include "util/buffer.h"
-#include "util/z3_omp.h"
 
 typedef unsigned int mpn_digit;
 
 class mpn_manager {
-#ifndef _NO_OMP_
-    omp_nest_lock_t m_lock;
+#ifndef SINGLE_THREAD
+    std::recursive_mutex m_lock;
+#define MPN_BEGIN_CRITICAL() m_lock.lock()
+#define MPN_END_CRITICAL() m_lock.unlock()
+#else
+#define MPN_BEGIN_CRITICAL() {}
+#define MPN_END_CRITICAL()   {}
 #endif
-#define MPN_BEGIN_CRITICAL() omp_set_nest_lock(&m_lock);
-#define MPN_END_CRITICAL() omp_unset_nest_lock(&m_lock);
 
 public:
     mpn_manager();
@@ -61,7 +64,7 @@ public:
     char * to_string(mpn_digit const * a, size_t lng,
                      char * buf, size_t lbuf) const;
 private:
-    #ifdef _AMD64_
+    #if defined(__LP64__) || defined(_WIN64)
     class  mpn_sbuffer : public sbuffer<mpn_digit> {
     public:
         mpn_sbuffer() : sbuffer<mpn_digit>() {}
